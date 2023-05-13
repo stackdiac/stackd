@@ -1,0 +1,28 @@
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'
+      - name: Install Poetry
+        run: python -m pip install poetry
+      - name: Install dependencies
+        run: poetry install
+      - name: Sync version with Git tag
+        run: poetry version $(echo $GITHUB_REF | cut -d/ -f3)
+      - name: Build package
+        run: poetry build
+      - name: Publish package
+        env:
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.POETRY_PYPI_TOKEN }}
+        run: poetry publish -vvv

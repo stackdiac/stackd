@@ -99,12 +99,14 @@ class Repo(BaseModel):
         # checkout specified or latest tag
         tags = repo.tags
         if not tags:
-            raise ValueError(f"No tags found in repository {self}")
+            logger.info(f"no tags found in repository {self}. checking out {self.branch} branch")
+            repo.git.checkout(self.branch)
+            return            
         
         if self.tag in [str(t) for t in tags]:
             repo.git.checkout(self.tag)
         else:
-            raise ValueError(f"Tag '{self.tag}' not found in repository")
+            raise ValueError(f"tag '{self.tag}' not found in repository")
             
     
     def copyfiles(self, source, dest):

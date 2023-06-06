@@ -15,6 +15,8 @@ from stackdiac import models
 from stackdiac.models.provider import Provider
 from ..models import spec
 
+import hvac
+
 from . import filters
 
 logger = logging.getLogger(__name__)
@@ -55,12 +57,13 @@ class StackdModel(BaseModel):
 class Stackd(StackdModel):
     conf: models.Config | None = None
     counters: StackdCounters = StackdCounters()
+    vault: hvac.Client | None = None
 
     class Config:
         # orm_mode = True
         exceptions = True
-        exclude = {"versions", "counters"}
-   #     exclude = {'clusters', 'versions', 'conf'}
+        exclude = {"versions", "counters", "vault"}   
+        arbitrary_types_allowed = True
 
     @property
     def dns_zone(self) -> str:
@@ -85,8 +88,6 @@ class Stackd(StackdModel):
             remote = {},
             local = {},
         )
-
-        # server=tun@ssh.data.production.v10.link:22223&remote=mongodb-client.state:27017&local=dp-state-db.tun:27017
 
         qs = parse_qs(tunnel_qs)
 
@@ -122,6 +123,20 @@ class Stackd(StackdModel):
                 merge_from=models.get_initial_config(name="unconfigured", domain="example.com", 
                                                         vault_address="http://127.0.0.1:9090").dict()
                                             ).parse_obj_as(config.Config)
+
+        try:
+            self.vault = hvac.Client(url=self.conf.vars['vault_address'],
+                                    token=os.environ['TF_VAR_vault_token'])
+        except KeyError:
+            logger.error(f"{self} vault not configured. set TF_VAR_vault_token")
+            raise ProcessException("vault not configured. set TF_VAR_vault_token")
+        else:
+            logger.debug(f"{self} vault configured: {self.conf.vars['vault_address']}")
+
+        self.vault.secrets.kv.v2.configure(
+            max_versions=20,
+            mount_point='kv',
+        )
 
         # with open(self.config_file) as f:
         #     conf_data = models.get_initial_config(name="unconfigured", domain="example.com", vault_address="http://127.0.0.1:9090").dict()
@@ -265,6 +280,9 @@ class Stackd(StackdModel):
             TERRAGRUNT_WORKING_DIR=target,
             TERRAGRUNT_TFPATH=self.conf.binaries.terraform.abspath,
             TF_INPUT="false",
+            TERRAGRUNT_DOWNLOAD=os.path.join(self.cacheroot, "terragrunt-downloads"),
+            TERRAGRUNT_CACHE=os.path.join(self.cacheroot, "terragrunt-cache"),
+            TF_PLUGIN_CACHE_DIR=os.path.join(self.cacheroot, "terraform-plugins"),
         )
         opts = " ".join(terragrunt_options)
         cmd = f"{self.conf.binaries.terragrunt.abspath} {opts}"
@@ -285,4 +303,6 @@ class Stackd(StackdModel):
         self.clusters[cluster].stacks[stack].build(cluster=self.clusters[cluster], sd=self, **kwargs)
         self.clusters[cluster].stacks[stack].stack.operations[operation].run(target=target, sd=self, 
             cluster=self.clusters[cluster],
-            stack=self.clusters[cluster].stacks[stack],**kwargs)
+            stack=self.clusters[cluster].stacks[stack],
+            cluster_stack=self.clusters[cluster].stacks[stack], # < more logical name
+            **kwargs)

@@ -1,15 +1,20 @@
 
 from urllib.parse import urlparse
-from pydantic import BaseModel, parse_obj_as
+from pydantic import BaseModel, parse_obj_as, Field
 from deepmerge import always_merger
 from copy import deepcopy
 import logging, os
 from typing import Any
+
+import yaml
 from stackdiac.models.backend import Backend
 from stackdiac.models.spec import Spec, SpecModel
 
 from stackdiac.models.operation import Operation
 from stackdiac.models.provider import Provider
+
+import hvac
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +40,50 @@ class ModuleDependency(BaseModel):
     def varname(self) -> str:
         return f"{self.stack_name}_{self.module_name}".replace("-", "_")
 
+class ModuleSecretStatus(Enum):
+    UNKNOWN = "unknown"
+    NOT_EXISTS = "not_exists"
+    EXISTS = "exists"
+    VALID   = "valid"
+
+class ModuleSecret(BaseModel):
+    name: str | None = None
+    secret_type: str | None = None
+    secret_schema: dict | None = None
+    required: bool = False
+    status: ModuleSecretStatus = ModuleSecretStatus.UNKNOWN
+
+    def build(self, cluster, cluster_stack, stack, sd, module, status, **kwargs):
+        logger.info(f"building secret {self.name} for {module.name}")
+
+        if self.secret_schema is None and self.secret_type is not None:
+            # extracting schema from stack.schema.components.schemas
+            self.secret_schema = stack.stack_schema['components']['schemas'][self.secret_type]
+            self.status = status
+
+class ModuleSchemas(BaseModel):
+    secrets: dict[str, ModuleSecret] = {}
+    vars: str | None = None
+
+    schemas: dict[str, Any] = {}
+
+    def build(self, cluster, cluster_stack, stack, sd, module, **kwargs):
+        logger.info(f"building schemas for {module.name}")
+
+        if self.vars:
+            self.schemas["vars"] = stack.stack_schema['components']['schemas'][self.vars]
+
+        # if self.secrets:
+        #     for name, secret in self.secrets.items():
+        #         secret.build(cluster, cluster_stack, stack, sd, module, status, **kwargs)
+        #         self.schemas[name] = SpecModel.parse_obj(secret.secret_schema)
 
 class Module(BaseModel):
     name: str | None = None
     source: str | None = None
     src: str | None = None
     vars: dict[str, Any] = {}
+    module_vars: dict[str, Any] = {}
     built_vars: dict[str, Any] = {}
     providers: list[str] = []
     provider_overrides: dict[str, Any] = {}
@@ -52,6 +95,8 @@ class Module(BaseModel):
     tf_backend: str = "s3"
     tf_backend_config: dict[str, Any] = {}
     backend: Backend | None = None
+    secrets: dict[str, ModuleSecret] = {}
+    schemas: ModuleSchemas | None = None
     
 
     def __str__(self) -> str:
@@ -62,6 +107,10 @@ class Module(BaseModel):
         if self.source:
             self.src = self.source            
 
+        for name, secret in self.secrets.items():
+            if secret.name is None:
+                secret.name = name
+
     @property
     def abssrc(self) -> str:
         from stackdiac.stackd import sd
@@ -71,6 +120,18 @@ class Module(BaseModel):
     @property
     def absdeps(self) -> list[str]:
         return [ os.path.join(os.path.dirname(self.abssrc), d) for d in self.deps ]
+    
+    
+    def build_vars_file(self, sd, cluster_stack, cluster, **kwargs) -> str:
+        return os.path.join(sd.root, "vars",  cluster.name, cluster_stack.name, self.name, "vars.yaml")
+    
+    def build_module_vars(self, sd, cluster_stack, cluster, **kwargs) -> dict[str, Any]:
+        vars_file = self.build_vars_file(sd, cluster_stack, cluster)
+        if os.path.exists(vars_file):
+            return yaml.load(open(vars_file), Loader=yaml.FullLoader)
+        else:
+            return {}
+   
 
     def build_deps(self, stack, module, cluster, deps:list[str], sd, **kwargs) -> list[ModuleDependency]:
         for d in deps:
@@ -144,6 +205,7 @@ class Module(BaseModel):
             namespace=self.get_namespace(stack),
             charts_root=self.charts_root,
             module_secret=f"kv/{cluster.name}/module/{stack.name}/{self.name}",
+            module_secret_path=f"{cluster.name}/module/{stack.name}/{self.name}",
         )
 
     @property
@@ -165,6 +227,7 @@ class Module(BaseModel):
         _vars = {
             'build_path': dest,
             'module_path': path,
+            'project_root': sd.root,
         }
         
         varSources = [
@@ -176,11 +239,16 @@ class Module(BaseModel):
         
         _build_vars = deepcopy(_vars)
 
+        self.module_vars = self.build_module_vars(sd, cluster_stack, cluster, **kwargs)
+
         for v in [
-            self.vars,
-            sd.conf.vars,
-            cluster.vars,
-            cluster_stack.vars]:
+                self.vars,
+                sd.conf.vars,
+                cluster.vars,
+                cluster_stack.vars,
+                cluster_stack.module_vars.get(self.name, {}),
+                self.module_vars
+                ]:
             always_merger.merge(_vars, deepcopy(v))
 
         self.built_vars = deepcopy(_vars)
@@ -226,6 +294,27 @@ class Module(BaseModel):
         
         bk = self.backend or Backend()
 
+        # building secrets
+        vault_module_secrets = []
+        if self.secrets:
+            try:
+                resp = sd.vault.kv.v2.list_secrets(path=self.built_vars["module_secret_path"], mount_point='kv')
+            except hvac.exceptions.InvalidPath:
+                pass
+            else:
+                vault_module_secrets = resp["data"]["keys"]          
+
+
+        for s in self.secrets.values():
+            
+            status = ModuleSecretStatus.EXISTS if s.name in vault_module_secrets else ModuleSecretStatus.NOT_EXISTS
+            s.build(cluster, cluster_stack, stack, sd, module=self, status=status, **kwargs)
+        
+        # building schemas
+
+        if self.schemas:
+            self.schemas.build(cluster, cluster_stack, stack, sd, module=self, **kwargs)
+        
         ctx = dict(module=self, cluster=cluster, stackd=sd, vars=_vars, 
             inputs=list(self.build_deps(stack=stack, cluster=cluster, module=self, deps=self.inputs, sd=sd, **kwargs)),
             module_deps=[ d.abspath for d in list(self.build_deps(stack=stack, cluster=cluster, module=self, 
@@ -261,6 +350,7 @@ class StackModel(BaseModel):
     vars: dict[str, Any] = {}
     backend: Backend | None = None
     spec: SpecModel | None = None
+    stack_schema: Any = Field({}, alias="schema")
 
 
 class Stack(StackModel):

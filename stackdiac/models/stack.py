@@ -53,8 +53,7 @@ class ModuleSecret(BaseModel):
     required: bool = False
     status: ModuleSecretStatus = ModuleSecretStatus.UNKNOWN
 
-    def build(self, cluster, cluster_stack, stack, sd, module, status, **kwargs):
-        logger.info(f"building secret {self.name} for {module.name}")
+    def build(self, cluster, cluster_stack, stack, sd, module, status, **kwargs):       
 
         if self.secret_schema is None and self.secret_type is not None:
             # extracting schema from stack.schema.components.schemas
@@ -67,16 +66,11 @@ class ModuleSchemas(BaseModel):
 
     schemas: dict[str, Any] = {}
 
-    def build(self, cluster, cluster_stack, stack, sd, module, **kwargs):
-        logger.info(f"building schemas for {module.name}")
-
+    def build(self, cluster, cluster_stack, stack, sd, module, **kwargs):        
         if self.vars:
             self.schemas["vars"] = stack.stack_schema['components']['schemas'][self.vars]
 
-        # if self.secrets:
-        #     for name, secret in self.secrets.items():
-        #         secret.build(cluster, cluster_stack, stack, sd, module, status, **kwargs)
-        #         self.schemas[name] = SpecModel.parse_obj(secret.secret_schema)
+  
 
 class Module(BaseModel):
     name: str | None = None
@@ -314,6 +308,14 @@ class Module(BaseModel):
 
         if self.schemas:
             self.schemas.build(cluster, cluster_stack, stack, sd, module=self, **kwargs)
+
+        if not self.module_vars and self.schemas and self.schemas.vars:
+            logger.info("copying built vars to module vars")
+            for v in self.schemas.schemas["vars"]["properties"].keys():                
+                _v = self.built_vars.get(v, self.schemas.schemas["vars"]["properties"][v].get("default", None))
+                logger.info(f"copying {v}={_v}")
+                if _v:
+                    self.module_vars[v] = _v
         
         ctx = dict(module=self, cluster=cluster, stackd=sd, vars=_vars, 
             inputs=list(self.build_deps(stack=stack, cluster=cluster, module=self, deps=self.inputs, sd=sd, **kwargs)),

@@ -6,10 +6,11 @@ import time
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import parse_obj_as, BaseModel
-from typing import Any
+from typing import Any, Optional, Pattern, Sequence, Tuple
 import subprocess
 from deepmerge import always_merger
-
+from yamlinclude import YamlIncludeConstructor
+from yamlinclude.readers import Reader
 
 from stackdiac import models
 from stackdiac.models.provider import Provider
@@ -53,6 +54,37 @@ class StackdModel(BaseModel):
     root: str = os.environ.get("STACKD_ROOT", ".")
     clusters: dict[str, models.ClusterModel] = {}    
     providers: dict[str, models.Provider] = {}
+
+
+class RepoYamlIncludeConstructor(YamlIncludeConstructor):
+    def __init__(self, sd, *args, **kwargs):
+        self.sd = sd
+        super().__init__(*args, **kwargs)
+
+    def get_fragment(self, data, fragment):
+        # fragment is a path to a dict key, e.g. "/components/schemas/Resources" from openapi spec
+        # it is parsed and element is fetched from data then returned
+        fragments = [ f for f in fragment.split("/") if f ]
+        if len(fragments) == 1:
+            return data[fragments[0]]
+        else:
+            return self.get_fragment(data[fragments[0]], "/".join(fragments[1:]))
+        
+
+    def load(
+            self,
+            loader,
+            pathname: str,
+            *args, **kwargs):
+        
+        path, fragment = self.sd.resolve_path(pathname, with_fragment=True)
+        
+        data = super().load(loader, path, *args, **kwargs)
+        if fragment:
+            return self.get_fragment(data, fragment)
+        
+        return data
+
     
 class Stackd(StackdModel):
     conf: models.Config | None = None
@@ -81,31 +113,6 @@ class Stackd(StackdModel):
     def builddir(self):
         return os.path.join(self.root, "build")
 
-    def parse_tunnel(self, tunnel_qs: str) -> str:
-        
-        spec = dict(
-            ssh = {},
-            remote = {},
-            local = {},
-        )
-
-        qs = parse_qs(tunnel_qs)
-
-        spec["ssh"]["username"], server_hostport = qs["server"][0].split("@")
-        spec["ssh"]["host"], spec["ssh"]["port"] = server_hostport.split(":")
-        spec["ssh"]["port"] = int(spec["ssh"]["port"])
-
-        spec["remote"]["host"], spec["remote"]["port"] = qs["remote"][0].split(":")
-        spec["remote"]["port"] = int(spec["remote"]["port"])
-
-        local_endpoint, spec["local"]["port"] = qs["local"][0].split(":")
-        spec["local"]["port"] = int(spec["local"]["port"])
-        spec["local"]["service"], spec["local"]["namespace"] = local_endpoint.split(".")
-
-        
-        logger.info(f"parsing tunnel {qs} {spec}")
-        return json.dumps(spec)
-
     def tpl_readfile_func(self, jinja_env):
         def func(path: str) -> str:
             return jinja_env.get_template(path).render(stackd=self)            
@@ -123,7 +130,7 @@ class Stackd(StackdModel):
                 merge_from=models.get_initial_config(name="unconfigured", domain="example.com", 
                                                         vault_address="http://127.0.0.1:9090").dict()
                                             ).parse_obj_as(config.Config)
-
+        RepoYamlIncludeConstructor(sd=self).add_to_loader_class(loader_class=yaml.SafeLoader, base_dir=self.root, sd=self)
         try:
             self.vault = hvac.Client(url=self.conf.vars['vault_address'],
                                     token=os.environ['TF_VAR_vault_token'])
@@ -261,17 +268,20 @@ class Stackd(StackdModel):
         return path
 
 
-    def resolve_path(self, src):
+    def resolve_path(self, src, with_fragment=False):
         """
         Resolve a module path to a local path
         repo can be specified as scheme: prefix
         """
         parsed_src = urlparse(src)
         if not parsed_src.scheme:
-            parsed_src = urlparse(f"root:{src}") # add root repo
-       
+            parsed_src = urlparse(f"root:{src}") # add root repo       
+        
         repo = self.conf.repos[parsed_src.scheme]
-        return os.path.join(repo.repo_dir, parsed_src.path)
+        if with_fragment:
+            return os.path.join(repo.repo_dir, parsed_src.path), parsed_src.fragment
+        else:
+            return os.path.join(repo.repo_dir, parsed_src.path)
     
     resolve_module_path = resolve_path
 

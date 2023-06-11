@@ -310,10 +310,10 @@ class Module(BaseModel):
             self.schemas.build(cluster, cluster_stack, stack, sd, module=self, **kwargs)
 
         if not self.module_vars and self.schemas and self.schemas.vars:
-            logger.info("copying built vars to module vars")
+            
             for v in self.schemas.schemas["vars"]["properties"].keys():                
                 _v = self.built_vars.get(v, self.schemas.schemas["vars"]["properties"][v].get("default", None))
-                logger.info(f"copying {v}={_v}")
+            
                 if _v:
                     self.module_vars[v] = _v
         

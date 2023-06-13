@@ -109,7 +109,8 @@ class Module(BaseModel):
     def abssrc(self) -> str:
         from stackdiac.stackd import sd
         assert self.src
-        return os.path.join(sd.root, self.src)
+        return sd.resolve_path(self.src)
+        #return os.path.join(sd.root, self.src)
 
     @property
     def absdeps(self) -> list[str]:

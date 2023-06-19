@@ -25,15 +25,18 @@ class PipelineStep(BaseModel):
     module: str
     title: str | None = None
     command: str | list[str] = "apply"
+    vars: dict[str, Any] = {}
 
-    def run(self, sd, cluster, cluster_stack, **kwargs):
+    def run(self, sd, cluster, cluster_stack, stack, operation, **kwargs):
         if self.title is None:
             self.title = f"run {self.command} on {self.module}"
             
         if self.command is not list:
             self.command = self.command.split(" ")
         
-        
+        cluster_stack.build(cluster=cluster, sd=sd, extra_vars=self.vars,
+                                                    **kwargs)
+        logger.info(f"builded {self.title} step with extra vars {self.vars}")
         sd.terragrunt(target=cluster_stack.stack.modules[self.module].built_vars["build_path"], 
                       terragrunt_options=self.command, 
                       cluster=cluster, **kwargs)
@@ -53,7 +56,7 @@ class Operation(BaseModel):
 
         for step in self.pipeline:
             logger.info(f"running step {step}")
-            step.run(sd, cluster, cluster_stack, **kwargs)
+            step.run(sd, cluster, cluster_stack, operation=self, **kwargs)
 
 
     def run_old(self, sd, target, cluster, stack, **kwargs):

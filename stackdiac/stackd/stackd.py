@@ -309,8 +309,10 @@ class Stackd(StackdModel):
         running  self.terragrunt with configured module path
     
         """
+        self.build()
         cluster, stack, operation = target.split("/")
         self.clusters[cluster].stacks[stack].build(cluster=self.clusters[cluster], sd=self, **kwargs)
+        
         self.clusters[cluster].stacks[stack].stack.operations[operation].run(target=target, sd=self, 
             cluster=self.clusters[cluster],
             stack=self.clusters[cluster].stacks[stack],

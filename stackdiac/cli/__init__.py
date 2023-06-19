@@ -66,8 +66,7 @@ cli.add_command(tg)
 @click.option("-b", "--build", is_flag=True, help="deprecated, always building")
 @click.argument("target")
 def op(target, build:bool, **kwargs):
-    sd.configure()
-    sd.build()
+    sd.configure()    
     sd.run_operation(target=target, **kwargs)
 
 cli.add_command(op)

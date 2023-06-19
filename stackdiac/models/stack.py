@@ -35,9 +35,12 @@ class ModuleDependency(BaseModel):
     abspath: str
     module_name: str
     stack_name: str
+    alias: str | None = None
 
     @property
     def varname(self) -> str:
+        if self.alias:
+            return self.alias
         return f"{self.stack_name}_{self.module_name}".replace("-", "_")
 
 class ModuleSecretStatus(Enum):
@@ -81,7 +84,7 @@ class Module(BaseModel):
     built_vars: dict[str, Any] = {}
     providers: list[str] = []
     provider_overrides: dict[str, Any] = {}
-    inputs: list[str] = []
+    inputs: Any = []
     deps: list[str] = []
     tf_state_key: str | None = None
     tf_state_bucket: str | None = None
@@ -128,8 +131,15 @@ class Module(BaseModel):
             return {}
    
 
-    def build_deps(self, stack, module, cluster, deps:list[str], sd, **kwargs) -> list[ModuleDependency]:
-        for d in deps:
+    def build_deps(self, stack, module, cluster, deps, sd, **kwargs) -> list[ModuleDependency]:
+        if type(deps) is list:
+            _deps = { d: None for d in deps }
+        elif type(deps) is dict:
+            _deps = deps
+        else:
+            raise Exception(f"invalid deps type {type(deps)}")
+        
+        for d, alias in _deps.items():            
             parts = [x for x in d.split("/") if x]
             if len(parts) == 2:
                 stack_name, module_name = parts
@@ -138,12 +148,14 @@ class Module(BaseModel):
                 stack_name = stack.name
             else:
                 raise Exception(f"invalid module dep {d}")
+           
             yield ModuleDependency(
                 name=d,
                 path=d,
                 abspath=os.path.join(sd.builddir, cluster.name, stack_name, module_name),
                 module_name=module_name,
-                stack_name=stack_name
+                stack_name=stack_name,
+                alias=alias
             )
 
     @property
@@ -214,7 +226,7 @@ class Module(BaseModel):
         from stackdiac.stackd import sd
         return os.path.join(sd.root, "build", cluster.name, stack.name, self.name)
 
-    def build(self, cluster, cluster_stack, stack, sd, **kwargs):
+    def build(self, cluster, cluster_stack, stack, sd, extra_vars={}, **kwargs):
         #from stackdiac.stackd import sd
         path = sd.resolve_module_path(self.src)
         dest = self.get_build_dir(cluster, stack)
@@ -242,7 +254,8 @@ class Module(BaseModel):
                 cluster.vars,
                 cluster_stack.vars,
                 cluster_stack.module_vars.get(self.name, {}),
-                self.module_vars
+                self.module_vars,
+                extra_vars
                 ]:
             always_merger.merge(_vars, deepcopy(v))
 

@@ -99,6 +99,12 @@ def get_initial_config(name: str, domain: str,
                 url = "https://github.com/gruntwork-io/terragrunt/releases/download/v{version}/terragrunt_linux_amd64",
                 binary = "terragrunt",
             ),
+            kustomize = Binary(
+                version = "5.1.0",
+                binary = "kustomize",
+                url = "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v{version}/kustomize_v{version}_linux_amd64.tar.gz",
+                extract="kustomize",
+            ),
         )
     )
 

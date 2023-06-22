@@ -48,8 +48,15 @@ class Binary(BaseModel):
         
         if self.extract:
             # If the binary is within a zip archive, extract it
-            zip_archive = zipfile.ZipFile(io.BytesIO(response.content))
-            binary_content = zip_archive.read(self.extract)
+            if url.endswith(".zip"):
+                zip_archive = zipfile.ZipFile(io.BytesIO(response.content))
+                binary_content = zip_archive.read(self.extract)
+            elif url.endswith(".tar.gz"):
+                import tarfile
+                tar_archive = tarfile.open(fileobj=io.BytesIO(response.content))
+                binary_content = tar_archive.extractfile(self.extract).read()
+            else:
+                raise ValueError(f"Unknown archive type for {url}")
         else:
             # If the binary is not within a zip archive, simply use the response content
             binary_content = response.content
@@ -68,9 +75,14 @@ class Binary(BaseModel):
 
 
 class Binaries(BaseModel):
+    kustomize: Binary = Binary(binary="kustomize",
+        version = "5.1.0",        
+                url = "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v{version}/kustomize_v{version}_linux_amd64.tar.gz",
+                extract="kustomize")
     terraform: Binary = Binary(binary="terraform", 
         url="https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip", 
         extract="terraform", version="1.4.4")
     terragrunt: Binary = Binary(binary="terragrunt", 
         url="https://github.com/gruntwork-io/terragrunt/releases/download/v{version}/terragrunt_linux_amd64",
         version="0.45.0")
+    

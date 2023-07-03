@@ -120,7 +120,7 @@ async def _api_get_clusters() -> list[Cluster]:
     from stackdiac.stackd import Stackd
     sd = Stackd()
     sd.configure()
-    logger.debug(f"get_clusters: {sd.clusters['data'].dict()}")
+    
     return list(sd.clusters.values())
 
 @api_app.get("/build/{cluster_name}", operation_id="build_cluster", response_model=ClusterModel, tags=["cluster"])

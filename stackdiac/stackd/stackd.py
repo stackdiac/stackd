@@ -140,10 +140,13 @@ class Stackd(StackdModel):
         else:
             logger.debug(f"{self} vault configured: {self.conf.vars['vault_address']}")
 
-        self.vault.secrets.kv.v2.configure(
-            max_versions=20,
-            mount_point='kv',
-        )
+        try:
+            self.vault.secrets.kv.v2.configure(
+                max_versions=20,
+                mount_point='kv',
+            )
+        except Exception as e:
+            logger.error(f"kv err: {e}")
 
         # with open(self.config_file) as f:
         #     conf_data = models.get_initial_config(name="unconfigured", domain="example.com", vault_address="http://127.0.0.1:9090").dict()
